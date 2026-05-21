@@ -38,7 +38,7 @@ long simplefs_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
   }
 
   case SIMPLEFS_IOCTL_ERASE: {
-    // u8 zero[SIMPLEFS_SECTOR_SIZE] = {0};
+    u8 zero[SIMPLEFS_SECTOR_SIZE] = {0};
     u32 i, s;
 
     for (i = 0; i < sbi->file_count; i++) {
