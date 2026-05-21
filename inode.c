@@ -28,7 +28,7 @@ static struct inode *simplefs_make_inode_common(struct super_block *sb,
     return NULL;
 
   inode_init_owner(&nop_mnt_idmap, inode, NULL, mode);
-  inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+
   return inode;
 }
 
@@ -48,8 +48,7 @@ struct inode *simplefs_make_reg_inode(struct super_block *sb, u32 index) {
   inode->i_blocks = fm->sector_count * (SIMPLEFS_SECTOR_SIZE / 512);
   inode->i_op = &simplefs_file_inode_ops;
   inode->i_fop = &simplefs_file_ops;
-  inode->i_nlink = 1;
-
+  set_nlink(inode, 1);
   return inode;
 }
 
@@ -63,8 +62,7 @@ static struct inode *simplefs_make_dir_inode(struct super_block *sb) {
   inode->i_ino = 1;
   inode->i_op = &simplefs_dir_inode_ops;
   inode->i_fop = &simplefs_dir_ops;
-  inode->i_nlink = 2;
-
+  set_nlink(inode, 2);
   return inode;
 }
 
