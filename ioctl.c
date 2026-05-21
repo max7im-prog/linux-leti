@@ -25,44 +25,41 @@ long simplefs_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
       struct simplefs_file_meta *fm = &sbi->files[i];
 
       for (s = 0; s < fm->sector_count; s++) {
-        ret = simplefs_write_disk_super; /* silence compiler? no, see below */
+        ret = simplefs_rw_bytes(sb, fm->start_sector + s, 0, zero,
+                                SIMPLEFS_SECTOR_SIZE, true);
+        if (ret < 0)
+          break;
       }
-    }
-    ret = 0;
-    for (i = 0; i < sbi->file_count && !ret; i++) {
-      struct simplefs_file_meta *fm = &sbi->files[i];
 
-      for (s = 0; s < fm->sector_count; s++) {
-        ret = simplefs_write_disk_super;
-      }
+      fm->size = 0;
+      fm->hash = 0;
     }
     break;
   }
 
   case SIMPLEFS_IOCTL_ERASE: {
-    u8 zero[SIMPLEFS_SECTOR_SIZE] = {0};
+    // u8 zero[SIMPLEFS_SECTOR_SIZE] = {0};
     u32 i, s;
 
-    for (i = 0; i < sbi->file_count && !ret; i++) {
+    for (i = 0; i < sbi->file_count; i++) {
       struct simplefs_file_meta *fm = &sbi->files[i];
 
-      for (s = 0; s < fm->sector_count; s++)
+      for (s = 0; s < fm->sector_count; s++) {
         ret = simplefs_rw_bytes(sb, fm->start_sector + s, 0, zero,
-                                SIMPLEFS_SECTOR_SIZE, true) < 0
-                  ? -EIO
-                  : 0;
-
-      if (!ret) {
-        fm->size = 0;
-        fm->hash = 0;
+                                SIMPLEFS_SECTOR_SIZE, true);
+        if (ret < 0)
+          break;
       }
+
+      fm->size = 0;
+      fm->hash = 0;
     }
 
-    if (!ret) {
-      ret = simplefs_zero_sector_range(sb, sbi->super1_sector, 1);
-      if (!ret)
-        ret = simplefs_zero_sector_range(sb, sbi->super2_sector, 1);
-    }
+    if (!ret)
+      simplefs_zero_sector_range(sb, sbi->super1_sector, 1);
+    if (!ret)
+      simplefs_zero_sector_range(sb, sbi->super2_sector, 1);
+
     break;
   }
 
