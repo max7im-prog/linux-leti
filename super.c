@@ -1,7 +1,6 @@
 #include "simplefs.h"
 
 #include <linux/fs.h>
-#include <linux/genhd.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 
@@ -107,8 +106,8 @@ int simplefs_load_or_format(struct super_block *sb,
   u64 file_bytes;
   int ret;
 
-  loff_t size = i_size_read(sb->s_bdev->bd_inode);
-  dev_sectors = get_capacity(sb->s_bdev->bd_disk);
+  loff_t size = i_size_read(file_bdev(sb->s_bdev)->bd_inode);
+  dev_sectors = size >> 9;
   sbi->total_sectors = dev_sectors;
 
   if (sbi->super1_sector == sbi->super2_sector)
