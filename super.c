@@ -107,10 +107,9 @@ int simplefs_load_or_format(struct super_block *sb,
   __u64 dev_bytes;
   u64 file_bytes;
   int ret;
-  u32 i;
 
   dev_bytes = bdev_nr_bytes(sb->s_bdev);
-  dev_sectors = dev_bytes >> 9; /* 512-byte sectors */
+  dev_sectors = dev_bytes >> 9;
   sbi->total_sectors = dev_sectors;
 
   if (sbi->super1_sector == sbi->super2_sector)
@@ -186,13 +185,7 @@ int simplefs_load_or_format(struct super_block *sb,
   if (ret)
     return ret;
 
-  for (i = 0; i < sbi->file_count; i++) {
-    struct simplefs_file_meta *fm = &sbi->files[i];
-
-    ret = simplefs_zero_sector_range(sb, fm->start_sector, fm->sector_count);
-    if (ret)
-      return ret;
-  }
+  /* Don't zero all data sectors here. Mount must stay fast. */
 
   return 0;
 }
