@@ -1,5 +1,6 @@
 #include "simplefs.h"
 
+#include <linux/blkdev.h>
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -103,11 +104,13 @@ int simplefs_load_or_format(struct super_block *sb,
   struct simplefs_disk_super ds1, ds2, *chosen = NULL;
   struct simplefs_disk_super newds;
   __u64 dev_sectors;
+  __u64 dev_bytes;
   u64 file_bytes;
   int ret;
+  u32 i;
 
-  loff_t size = i_size_read(file_bdev(sb->s_bdev)->bd_inode);
-  dev_sectors = size >> 9;
+  dev_bytes = bdev_nr_bytes(sb->s_bdev);
+  dev_sectors = dev_bytes >> 9; /* 512-byte sectors */
   sbi->total_sectors = dev_sectors;
 
   if (sbi->super1_sector == sbi->super2_sector)
@@ -183,8 +186,9 @@ int simplefs_load_or_format(struct super_block *sb,
   if (ret)
     return ret;
 
-  for (u32 i = 0; i < sbi->file_count; i++) {
+  for (i = 0; i < sbi->file_count; i++) {
     struct simplefs_file_meta *fm = &sbi->files[i];
+
     ret = simplefs_zero_sector_range(sb, fm->start_sector, fm->sector_count);
     if (ret)
       return ret;
