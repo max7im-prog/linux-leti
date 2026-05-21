@@ -1,5 +1,7 @@
 obj-m += simplefs.o
 
+simplefs-objs := main.o super.o inode.o file.o ioctl.o disk.o
+
 KDIR := /lib/modules/$(shell uname -r)/build
 PWD  := $(shell pwd)
 
