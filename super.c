@@ -113,7 +113,7 @@ int simplefs_load_or_format(struct super_block *sb,
   dev_bytes = bdev_nr_bytes(sb->s_bdev);
   pr_info("load_or_format: after bdev_nr_bytes\n");
   dev_sectors = dev_bytes >> 9;
-  pr_info("dev_sectors: %llu, dev_bytes: &llu\n", dev_sectors, dev_bytes);
+  pr_info("dev_sectors: %llu, dev_bytes: %llu\n", dev_sectors, dev_bytes);
   sbi->total_sectors = dev_sectors;
 
   if (sbi->super1_sector == sbi->super2_sector)
