@@ -33,15 +33,19 @@ static struct dentry *simplefs_mount(struct file_system_type *fs_type,
     pr_err("expected disk_name=%s, got %s\n", disk_name, dev_name);
     return ERR_PTR(-EINVAL);
   }
-
+  pr_info("begin mount\n");
   return mount_bdev(fs_type, flags, dev_name, data, simplefs_fill_super);
+  pr_info("mounted\n");
 }
 
 static void simplefs_kill_sb(struct super_block *sb) {
   struct simplefs_sb_info *sbi = sb->s_fs_info;
 
+  pr_info("begin kill_block_super\n");
   kill_block_super(sb);
+  pr_info("killed block super\n");
   simplefs_free_sb_info(sbi);
+  pr_info("freed sb info\n");
 }
 
 static struct file_system_type simplefs_fs_type = {

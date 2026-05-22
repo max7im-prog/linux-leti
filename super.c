@@ -198,11 +198,15 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent) {
   (void)data;
   (void)silent;
 
+  pr_info("befor kzalloc\n");
   sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+  pr_info("after kzalloc\n");
   if (!sbi)
     return -ENOMEM;
 
+  pr_info("before mutex_init\n");
   mutex_init(&sbi->lock);
+  pr_info("after mutex_init\n");
 
   sbi->super1_sector = sb1_sector;
   sbi->super2_sector = sb2_sector;
@@ -221,17 +225,23 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent) {
   sb->s_op = &simplefs_super_ops;
   sb->s_maxbytes = (loff_t)sbi->max_file_sectors * SIMPLEFS_SECTOR_SIZE;
 
+  pr_info("before load_or_format\n");
   ret = simplefs_load_or_format(sb, sbi);
+  pr_info("after load_or_format\n");
   if (ret)
     goto fail;
 
+  pr_info("before make_root_inode\n");
   root_inode = simplefs_make_root_inode(sb);
+  pr_info("after make_root_inode\n");
   if (!root_inode) {
     ret = -ENOMEM;
     goto fail;
   }
 
+  pr_info("before d_make_root\n");
   sb->s_root = d_make_root(root_inode);
+  pr_info("after d_make_root\n");
   if (!sb->s_root) {
     ret = -ENOMEM;
     goto fail;
@@ -243,7 +253,9 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent) {
   return 0;
 
 fail:
+  pr_info("fail - before free_sb_info\n");
   simplefs_free_sb_info(sbi);
+  pr_info("fail - after free_sb_info\n");
   sb->s_fs_info = NULL;
   return ret;
 }
