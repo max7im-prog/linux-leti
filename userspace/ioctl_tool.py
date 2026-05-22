@@ -1,50 +1,53 @@
 import argparse
 import fcntl
+import struct
+import os
 
-# must match kernel exactly
+# MUST match kernel exactly
 SIMPLEFS_IOC_MAGIC = ord('s')
 
-# Linux ioctl encoding (same as kernel _IO)
+# correct Linux ioctl encoding
 
 
-def IO(nr):
-    return (SIMPLEFS_IOC_MAGIC << 8) | nr
+def IOC(dir, type, nr, size):
+    return (dir << 30) | (type << 8) | nr | (size << 16)
 
 
-def IOWR(nr):
-    return (SIMPLEFS_IOC_MAGIC << 8) | nr
+def IO(type, nr):
+    return IOC(0, type, nr, 0)
 
 
-IOCTL_CLEAR = IO(1)
-IOCTL_ERASE = IO(2)
-IOCTL_GET_HASHES = IOWR(3)
-IOCTL_GET_MAP = IOWR(4)
+def IOWR(type, nr, size):
+    return IOC(2, type, nr, size)
 
 
-def ioctl_clear(fd):
-    fcntl.ioctl(fd, IOCTL_CLEAR)
+IOCTL_CLEAR = IO(SIMPLEFS_IOC_MAGIC, 1)
+IOCTL_ERASE = IO(SIMPLEFS_IOC_MAGIC, 2)
+IOCTL_GET_HASHES = IOWR(SIMPLEFS_IOC_MAGIC, 3, 256)
+IOCTL_GET_MAP = IOWR(SIMPLEFS_IOC_MAGIC, 4, 256)
 
 
-def ioctl_erase(fd):
-    fcntl.ioctl(fd, IOCTL_ERASE)
+def ioctl(fd, cmd, arg=None):
+    if arg is None:
+        return fcntl.ioctl(fd, cmd)
+    return fcntl.ioctl(fd, cmd, arg)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dev", required=True)
-    parser.add_argument("cmd")
-
-    args = parser.parse_args()
+    p = argparse.ArgumentParser()
+    p.add_argument("--dev", required=True)
+    p.add_argument("cmd")
+    args = p.parse_args()
 
     with open(args.dev, "rb+", buffering=0) as f:
         fd = f.fileno()
 
         if args.cmd == "clear":
-            ioctl_clear(fd)
+            ioctl(fd, IOCTL_CLEAR)
             print("OK clear")
 
         elif args.cmd == "erase":
-            ioctl_erase(fd)
+            ioctl(fd, IOCTL_ERASE)
             print("OK erase")
 
         else:
