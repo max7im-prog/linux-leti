@@ -22,7 +22,11 @@ static int simplefs_read_sector(struct super_block *sb, __u64 sector,
                                 void *buf) {
   struct buffer_head *bh;
 
+  pr_info("read_sector: sector=%llu\n", (unsigned long long)sector);
+
   bh = sb_bread(sb, sector);
+
+  pr_info("read_sector: after sb_bread\n");
   if (!bh)
     return -EIO;
 
