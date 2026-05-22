@@ -1,27 +1,24 @@
 import argparse
 import fcntl
-import struct
 
-# ===== must match kernel =====
+# must match kernel exactly
 SIMPLEFS_IOC_MAGIC = ord('s')
 
-
-def _io(magic, nr):
-    return (magic << 8) | nr
+# Linux ioctl encoding (same as kernel _IO)
 
 
-IOCTL_CLEAR = _io(SIMPLEFS_IOC_MAGIC, 1)
-IOCTL_ERASE = _io(SIMPLEFS_IOC_MAGIC, 2)
-
-# _IOWR in Linux:
+def IO(nr):
+    return (SIMPLEFS_IOC_MAGIC << 8) | nr
 
 
-def _iowr(magic, nr, size):
-    return (magic << 8) | (nr) | (size << 16)
+def IOWR(nr):
+    return (SIMPLEFS_IOC_MAGIC << 8) | nr
 
 
-IOCTL_GET_HASHES = _iowr(SIMPLEFS_IOC_MAGIC, 3, 8)
-IOCTL_GET_MAP = _iowr(SIMPLEFS_IOC_MAGIC, 4, 128)
+IOCTL_CLEAR = IO(1)
+IOCTL_ERASE = IO(2)
+IOCTL_GET_HASHES = IOWR(3)
+IOCTL_GET_MAP = IOWR(4)
 
 
 def ioctl_clear(fd):

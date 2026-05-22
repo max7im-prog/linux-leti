@@ -5,6 +5,7 @@
 #include <linux/uaccess.h>
 
 long simplefs_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
+  pr_info("SIMPLEFS IOCTL CALLED: cmd=%x\n", cmd);
   struct inode *inode = file_inode(file);
   struct super_block *sb = inode->i_sb;
   struct simplefs_sb_info *sbi = sb->s_fs_info;
