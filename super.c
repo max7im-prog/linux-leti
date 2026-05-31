@@ -99,21 +99,61 @@ int simplefs_find_file_index_by_name(struct simplefs_sb_info *sbi,
   return -ENOENT;
 }
 
+static bool simplefs_disk_super_is_zero(const struct simplefs_disk_super *ds) {
+  static const struct simplefs_disk_super zero;
+
+  return !memcmp(ds, &zero, sizeof(*ds));
+}
+
+static int
+simplefs_validate_loaded_super(struct super_block *sb,
+                               const struct simplefs_disk_super *ds) {
+  __u64 dev_sectors = bdev_nr_bytes(sb->s_bdev) >> 9;
+
+  if (ds->magic != SIMPLEFS_MAGIC)
+    return -EUCLEAN;
+
+  if (ds->version != SIMPLEFS_VERSION)
+    return -EUCLEAN;
+
+  if (ds->checksum != simplefs_calc_super_checksum(ds))
+    return -EUCLEAN;
+
+  if (ds->total_sectors != dev_sectors)
+    return -EUCLEAN;
+
+  if (ds->super1_sector >= dev_sectors || ds->super2_sector >= dev_sectors ||
+      ds->super1_sector == ds->super2_sector)
+    return -EINVAL;
+
+  if (ds->max_filename_len == 0 || ds->max_file_sectors == 0 ||
+      ds->file_count == 0)
+    return -EINVAL;
+
+  if (ds->data_start_sector >= dev_sectors)
+    return -EINVAL;
+
+  if (ds->data_start_sector + (u64)ds->file_count * ds->max_file_sectors >
+      ds->total_sectors)
+    return -EINVAL;
+
+  return 0;
+}
+
 int simplefs_load_or_format(struct super_block *sb,
                             struct simplefs_sb_info *sbi) {
-  pr_info("load_or_format: begin\n");
-  struct simplefs_disk_super ds1, ds2, *chosen = NULL;
-  struct simplefs_disk_super newds;
-  __u64 dev_sectors;
-  __u64 dev_bytes;
-  u64 file_bytes;
+  struct simplefs_disk_super ds1, ds2, newds;
+  struct simplefs_disk_super *chosen = NULL;
+  __u64 dev_bytes, dev_sectors;
+  u64 available_sectors;
+  int ret1, ret2;
   int ret;
+  bool ds1_read_ok, ds2_read_ok;
+  bool ds1_zero = false, ds2_zero = false;
+  bool ds1_valid = false, ds2_valid = false;
 
-  pr_info("load_or_format: before bdev_nr_bytes\n");
   dev_bytes = bdev_nr_bytes(sb->s_bdev);
-  pr_info("load_or_format: after bdev_nr_bytes\n");
-  dev_sectors = dev_bytes >> 9;
-  pr_info("dev_sectors: %llu, dev_bytes: %llu\n", dev_sectors, dev_bytes);
+  dev_sectors = dev_bytes >> 9; /* 512-byte sectors */
   sbi->total_sectors = dev_sectors;
 
   if (sbi->super1_sector == sbi->super2_sector)
@@ -122,24 +162,62 @@ int simplefs_load_or_format(struct super_block *sb,
   if (sbi->super1_sector >= dev_sectors || sbi->super2_sector >= dev_sectors)
     return -EINVAL;
 
-  pr_info("load_or_format: before simplefs_read_disk_super\n");
-  ret = simplefs_read_disk_super(sb, sbi->super1_sector, &ds1);
-  pr_info("load_or_format: after simplefs_read_disk_super\n");
+  ret1 = simplefs_read_disk_super(sb, sbi->super1_sector, &ds1);
+  ret2 = simplefs_read_disk_super(sb, sbi->super2_sector, &ds2);
 
-  pr_info("load_or_format: before read super 1\n");
-  if (!ret && simplefs_disk_super_valid(&ds1))
+  ds1_read_ok = (ret1 == 0);
+  ds2_read_ok = (ret2 == 0);
+
+  if (ds1_read_ok) {
+    ds1_zero = simplefs_disk_super_is_zero(&ds1);
+    ds1_valid = !ds1_zero && (simplefs_validate_loaded_super(sb, &ds1) == 0);
+  }
+
+  if (ds2_read_ok) {
+    ds2_zero = simplefs_disk_super_is_zero(&ds2);
+    ds2_valid = !ds2_zero && (simplefs_validate_loaded_super(sb, &ds2) == 0);
+  }
+
+  /*
+   * If at least one copy is valid, mount from it and try to restore
+   * the other copy if needed.
+   */
+  if (ds1_valid && ds2_valid) {
     chosen = &ds1;
 
-  pr_info("load_or_format: after read super 1\n");
+    /* Keep copies in sync if they differ. */
+    if (memcmp(&ds1, &ds2, sizeof(ds1)) != 0) {
+      ret = simplefs_write_disk_super(sb, sbi->super2_sector, &ds1);
+      if (ret)
+        pr_warn("simplefs: failed to resync super2: %d\n", ret);
+    }
+  } else if (ds1_valid) {
+    chosen = &ds1;
 
-  pr_info("load_or_format: before read super 2\n");
-  ret = simplefs_read_disk_super(sb, sbi->super2_sector, &ds2);
-  if (!ret && simplefs_disk_super_valid(&ds2))
-    chosen = chosen ? chosen : &ds2;
-  pr_info("load_or_format: after read super 2\n");
+    /* Restore second copy if possible. */
+    ret = simplefs_write_disk_super(sb, sbi->super2_sector, &ds1);
+    if (ret)
+      pr_warn("simplefs: failed to restore super2: %d\n", ret);
+  } else if (ds2_valid) {
+    chosen = &ds2;
+
+    /* Restore first copy if possible. */
+    ret = simplefs_write_disk_super(sb, sbi->super1_sector, &ds2);
+    if (ret)
+      pr_warn("simplefs: failed to restore super1: %d\n", ret);
+  } else if ((ds1_read_ok && ds1_zero) && (ds2_read_ok && ds2_zero)) {
+    /* Fresh device: both copies are empty. */
+    chosen = NULL;
+  } else {
+    /*
+     * Both copies are invalid, or one copy couldn't be read and the
+     * other one is not valid enough to mount.
+     * Do not format silently.
+     */
+    return -EUCLEAN;
+  }
 
   if (chosen) {
-    pr_info("load_or_format: chosen super\n");
     sbi->total_sectors = chosen->total_sectors;
     sbi->data_start_sector = chosen->data_start_sector;
     sbi->max_filename_len =
@@ -162,7 +240,6 @@ int simplefs_load_or_format(struct super_block *sb,
     return 0;
   }
 
-  pr_info("load_or_format: formatting super\n");
   /* fresh format */
   memset(&newds, 0, sizeof(newds));
   newds.magic = SIMPLEFS_MAGIC;
@@ -174,41 +251,30 @@ int simplefs_load_or_format(struct super_block *sb,
   newds.max_file_sectors = sbi->max_file_sectors;
 
   newds.data_start_sector = max(sbi->super1_sector, sbi->super2_sector) + 1;
-  file_bytes = dev_sectors > newds.data_start_sector
-                   ? (dev_sectors - newds.data_start_sector)
-                   : 0;
-  newds.file_count = (u32)(file_bytes / sbi->max_file_sectors);
+  available_sectors = (dev_sectors > newds.data_start_sector)
+                          ? (dev_sectors - newds.data_start_sector)
+                          : 0;
 
+  newds.file_count = (u32)(available_sectors / sbi->max_file_sectors);
   if (newds.file_count == 0)
     return -EINVAL;
 
   sbi->data_start_sector = newds.data_start_sector;
   sbi->file_count = newds.file_count;
 
-  pr_info("load_or_format: before prepare_file_table\n");
   ret = simplefs_prepare_file_table(sb, sbi);
-  pr_info("load_or_format: after prepare_file_table\n");
   if (ret)
     return ret;
 
-  pr_info("load_or_format: before newds.checksum\n");
   newds.checksum = simplefs_calc_super_checksum(&newds);
-  pr_info("load_or_format: after newds.checksum\n");
 
-  pr_info("load_or_format: before write_disk_super 1\n");
   ret = simplefs_write_disk_super(sb, sbi->super1_sector, &newds);
-  pr_info("load_or_format: after write_disk_super 1\n");
   if (ret)
     return ret;
 
-  pr_info("load_or_format: before write_disk_super 2\n");
   ret = simplefs_write_disk_super(sb, sbi->super2_sector, &newds);
-  pr_info("load_or_format: after write_disk_super 2\n");
   if (ret)
     return ret;
-
-  /* Don't zero all data sectors here. Mount must stay fast. */
-  pr_info("load_or_format: end\n");
 
   return 0;
 }
