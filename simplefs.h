@@ -51,6 +51,7 @@ struct simplefs_sb_info {
 
   struct simplefs_file_meta *files;
   struct mutex lock;
+  bool erased;
 };
 
 struct simplefs_hashes_hdr {

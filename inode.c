@@ -4,6 +4,10 @@
 #include <linux/slab.h>
 
 struct simplefs_file_meta *simplefs_meta_from_inode(struct inode *inode) {
+
+  if (!sbi || sbi->erased || !sbi->files || ino < SIMPLEFS_FIRST_FILE_INO)
+    return NULL;
+
   struct super_block *sb = inode->i_sb;
   struct simplefs_sb_info *sbi = sb->s_fs_info;
   u64 ino = inode->i_ino;
@@ -72,6 +76,10 @@ struct inode *simplefs_make_root_inode(struct super_block *sb) {
 
 static struct dentry *simplefs_lookup(struct inode *dir, struct dentry *dentry,
                                       unsigned int flags) {
+
+  if (sbi->erased || !sbi->files)
+    return ERR_PTR(-ENOENT);
+
   struct super_block *sb = dir->i_sb;
   struct simplefs_sb_info *sbi = sb->s_fs_info;
   int idx = simplefs_find_file_index_by_name(sbi, dentry->d_name.name,

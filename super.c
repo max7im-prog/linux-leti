@@ -88,6 +88,8 @@ int simplefs_prepare_file_table(struct super_block *sb,
 
 int simplefs_find_file_index_by_name(struct simplefs_sb_info *sbi,
                                      const char *name, size_t len) {
+  if (!sbi || sbi->erased || !sbi->files)
+    return -ENOENT;
   u32 i;
 
   for (i = 0; i < sbi->file_count; i++) {
@@ -339,6 +341,8 @@ int simplefs_fill_super(struct super_block *sb, void *data, int silent) {
     ret = -ENOMEM;
     goto fail;
   }
+
+  sbi->erased = false;
 
   pr_info("mounted: files=%u data_start=%llu\n", sbi->file_count,
           sbi->data_start_sector);
