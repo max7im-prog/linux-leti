@@ -7,14 +7,15 @@
 
 static ssize_t simplefs_read(struct file *file, char __user *buf, size_t len,
                              loff_t *ppos) {
-  if (sbi->erased)
-    return -EIO;
 
   struct inode *inode = file_inode(file);
   struct simplefs_file_meta *fm = simplefs_meta_from_inode(inode);
   struct simplefs_sb_info *sbi = inode->i_sb->s_fs_info;
   void *kbuf;
   ssize_t ret;
+
+  if (sbi->erased)
+    return -EIO;
 
   if (!fm)
     return -EIO;
@@ -54,15 +55,15 @@ static ssize_t simplefs_read(struct file *file, char __user *buf, size_t len,
 static ssize_t simplefs_write(struct file *file, const char __user *buf,
                               size_t len, loff_t *ppos) {
 
-  if (sbi->erased)
-    return -EIO;
-
   struct inode *inode = file_inode(file);
   struct simplefs_file_meta *fm = simplefs_meta_from_inode(inode);
   struct simplefs_sb_info *sbi = inode->i_sb->s_fs_info;
   loff_t cap;
   void *kbuf;
   ssize_t ret;
+
+  if (sbi->erased)
+    return -EIO;
 
   if (!fm)
     return -EIO;
@@ -113,12 +114,12 @@ static ssize_t simplefs_write(struct file *file, const char __user *buf,
 
 static int simplefs_iterate(struct file *file, struct dir_context *ctx) {
 
-  if (sbi->erased || !sbi->files)
-    return 0;
-
   struct inode *inode = file_inode(file);
   struct simplefs_sb_info *sbi = inode->i_sb->s_fs_info;
   loff_t i;
+
+  if (sbi->erased || !sbi->files)
+    return 0;
 
   if (!dir_emit_dots(file, ctx))
     return 0;
