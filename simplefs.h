@@ -113,6 +113,8 @@ int simplefs_find_file_index_by_name(struct simplefs_sb_info *sbi,
 int simplefs_load_or_format(struct super_block *sb,
                             struct simplefs_sb_info *sbi);
 int simplefs_fill_super(struct super_block *sb, void *data, int silent);
+int simplefs_store_file_meta(struct super_block *sb, u32 index,
+                             const struct simplefs_file_meta *fm);
 
 struct simplefs_file_meta *simplefs_meta_from_inode(struct inode *inode);
 struct inode *simplefs_make_root_inode(struct super_block *sb);
