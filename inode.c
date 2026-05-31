@@ -85,7 +85,7 @@ static struct dentry *simplefs_lookup(struct inode *dir, struct dentry *dentry,
 
   (void)flags;
 
-  if (sbi->erased || !sbi->files)
+  if (!sbi || sbi->erased || !sbi->files)
     return ERR_PTR(-ENOENT);
 
   if (idx >= 0) {

@@ -101,6 +101,76 @@ int simplefs_find_file_index_by_name(struct simplefs_sb_info *sbi,
   return -ENOENT;
 }
 
+static u32 simplefs_meta_sector_count_for_files(u32 file_count) {
+  size_t bytes = (size_t)file_count * sizeof(struct simplefs_disk_file_meta);
+
+  return DIV_ROUND_UP(bytes, SIMPLEFS_SECTOR_SIZE);
+}
+
+static int simplefs_load_file_meta(struct super_block *sb,
+                                   struct simplefs_sb_info *sbi) {
+  size_t bytes =
+      (size_t)sbi->file_count * sizeof(struct simplefs_disk_file_meta);
+  u8 *buf;
+  u32 i;
+  int ret;
+
+  if (!sbi->meta_sector_count)
+    return 0;
+
+  buf = kvmalloc((size_t)sbi->meta_sector_count * SIMPLEFS_SECTOR_SIZE,
+                 GFP_KERNEL);
+  if (!buf)
+    return -ENOMEM;
+
+  ret = simplefs_rw_bytes(sb, sbi->meta_start_sector, 0, buf, bytes, false);
+  if (ret < 0) {
+    kvfree(buf);
+    return ret;
+  }
+
+  for (i = 0; i < sbi->file_count; i++) {
+    struct simplefs_disk_file_meta *dm =
+        (struct simplefs_disk_file_meta *)(buf + i * sizeof(*dm));
+
+    sbi->files[i].size = le64_to_cpu(dm->size);
+    sbi->files[i].hash = le32_to_cpu(dm->hash);
+  }
+
+  kvfree(buf);
+  return 0;
+}
+
+int simplefs_store_file_meta(struct super_block *sb, u32 index,
+                             const struct simplefs_file_meta *fm) {
+  struct simplefs_sb_info *sbi = sb->s_fs_info;
+  struct simplefs_disk_file_meta dm;
+  __u64 off;
+  u8 *sector_buf;
+  int ret;
+
+  if (!sbi || index >= sbi->file_count)
+    return -EINVAL;
+
+  if (!sbi->meta_sector_count)
+    return -EINVAL;
+
+  memset(&dm, 0, sizeof(dm));
+  dm.size = cpu_to_le64(fm->size);
+  dm.hash = cpu_to_le32(fm->hash);
+
+  off = (u64)index * sizeof(struct simplefs_disk_file_meta);
+
+  sector_buf = kzalloc(SIMPLEFS_SECTOR_SIZE, GFP_KERNEL);
+  if (!sector_buf)
+    return -ENOMEM;
+
+  ret =
+      simplefs_rw_bytes(sb, sbi->meta_start_sector, off, &dm, sizeof(dm), true);
+  kfree(sector_buf);
+  return ret < 0 ? ret : 0;
+}
+
 static bool simplefs_disk_super_is_zero(const struct simplefs_disk_super *ds) {
   static const struct simplefs_disk_super zero;
 
@@ -112,31 +182,33 @@ simplefs_validate_loaded_super(struct super_block *sb,
                                const struct simplefs_disk_super *ds) {
   __u64 dev_sectors = bdev_nr_bytes(sb->s_bdev) >> 9;
 
-  if (ds->magic != SIMPLEFS_MAGIC)
+  if (le32_to_cpu(ds->magic) != SIMPLEFS_MAGIC)
     return -EUCLEAN;
-
-  if (ds->version != SIMPLEFS_VERSION)
+  if (le32_to_cpu(ds->version) != SIMPLEFS_VERSION)
     return -EUCLEAN;
-
   if (ds->checksum != simplefs_calc_super_checksum(ds))
     return -EUCLEAN;
-
-  if (ds->total_sectors != dev_sectors)
+  if (le64_to_cpu(ds->total_sectors) != dev_sectors)
     return -EUCLEAN;
 
-  if (ds->super1_sector >= dev_sectors || ds->super2_sector >= dev_sectors ||
-      ds->super1_sector == ds->super2_sector)
+  if (le64_to_cpu(ds->super1_sector) >= dev_sectors ||
+      le64_to_cpu(ds->super2_sector) >= dev_sectors)
     return -EINVAL;
 
-  if (ds->max_filename_len == 0 || ds->max_file_sectors == 0 ||
-      ds->file_count == 0)
+  if (le64_to_cpu(ds->super1_sector) == le64_to_cpu(ds->super2_sector))
     return -EINVAL;
 
-  if (ds->data_start_sector >= dev_sectors)
+  if (le64_to_cpu(ds->data_start_sector) >= dev_sectors)
     return -EINVAL;
 
-  if (ds->data_start_sector + (u64)ds->file_count * ds->max_file_sectors >
-      ds->total_sectors)
+  if (le32_to_cpu(ds->max_filename_len) == 0 ||
+      le32_to_cpu(ds->max_file_sectors) == 0 ||
+      le32_to_cpu(ds->file_count) == 0)
+    return -EINVAL;
+
+  if (le64_to_cpu(ds->data_start_sector) +
+          (u64)le32_to_cpu(ds->file_count) * le32_to_cpu(ds->max_file_sectors) >
+      le64_to_cpu(ds->total_sectors))
     return -EINVAL;
 
   return 0;
@@ -144,18 +216,16 @@ simplefs_validate_loaded_super(struct super_block *sb,
 
 int simplefs_load_or_format(struct super_block *sb,
                             struct simplefs_sb_info *sbi) {
-  struct simplefs_disk_super ds1, ds2, newds;
-  struct simplefs_disk_super *chosen = NULL;
+  struct simplefs_disk_super ds1, ds2, newds, *chosen = NULL;
   __u64 dev_bytes, dev_sectors;
   u64 available_sectors;
-  int ret1, ret2;
-  int ret;
-  bool ds1_read_ok, ds2_read_ok;
-  bool ds1_zero = false, ds2_zero = false;
-  bool ds1_valid = false, ds2_valid = false;
+  u32 meta_sector_count;
+  int ret1, ret2, ret;
+  bool ds1_zero, ds2_zero;
+  bool ds1_valid, ds2_valid;
 
   dev_bytes = bdev_nr_bytes(sb->s_bdev);
-  dev_sectors = dev_bytes >> 9; /* 512-byte sectors */
+  dev_sectors = dev_bytes >> 9;
   sbi->total_sectors = dev_sectors;
 
   if (sbi->super1_sector == sbi->super2_sector)
@@ -167,27 +237,16 @@ int simplefs_load_or_format(struct super_block *sb,
   ret1 = simplefs_read_disk_super(sb, sbi->super1_sector, &ds1);
   ret2 = simplefs_read_disk_super(sb, sbi->super2_sector, &ds2);
 
-  ds1_read_ok = (ret1 == 0);
-  ds2_read_ok = (ret2 == 0);
+  ds1_zero = (ret1 == 0) && simplefs_disk_super_is_zero(&ds1);
+  ds2_zero = (ret2 == 0) && simplefs_disk_super_is_zero(&ds2);
 
-  if (ds1_read_ok) {
-    ds1_zero = simplefs_disk_super_is_zero(&ds1);
-    ds1_valid = !ds1_zero && (simplefs_validate_loaded_super(sb, &ds1) == 0);
-  }
+  ds1_valid = (ret1 == 0) && !ds1_zero &&
+              (simplefs_validate_loaded_super(sb, &ds1) == 0);
+  ds2_valid = (ret2 == 0) && !ds2_zero &&
+              (simplefs_validate_loaded_super(sb, &ds2) == 0);
 
-  if (ds2_read_ok) {
-    ds2_zero = simplefs_disk_super_is_zero(&ds2);
-    ds2_valid = !ds2_zero && (simplefs_validate_loaded_super(sb, &ds2) == 0);
-  }
-
-  /*
-   * If at least one copy is valid, mount from it and try to restore
-   * the other copy if needed.
-   */
   if (ds1_valid && ds2_valid) {
     chosen = &ds1;
-
-    /* Keep copies in sync if they differ. */
     if (memcmp(&ds1, &ds2, sizeof(ds1)) != 0) {
       ret = simplefs_write_disk_super(sb, sbi->super2_sector, &ds1);
       if (ret)
@@ -195,76 +254,94 @@ int simplefs_load_or_format(struct super_block *sb,
     }
   } else if (ds1_valid) {
     chosen = &ds1;
-
-    /* Restore second copy if possible. */
     ret = simplefs_write_disk_super(sb, sbi->super2_sector, &ds1);
     if (ret)
       pr_warn("simplefs: failed to restore super2: %d\n", ret);
   } else if (ds2_valid) {
     chosen = &ds2;
-
-    /* Restore first copy if possible. */
     ret = simplefs_write_disk_super(sb, sbi->super1_sector, &ds2);
     if (ret)
       pr_warn("simplefs: failed to restore super1: %d\n", ret);
-  } else if ((ds1_read_ok && ds1_zero) && (ds2_read_ok && ds2_zero)) {
-    /* Fresh device: both copies are empty. */
+  } else if (ds1_zero && ds2_zero) {
     chosen = NULL;
   } else {
-    /*
-     * Both copies are invalid, or one copy couldn't be read and the
-     * other one is not valid enough to mount.
-     * Do not format silently.
-     */
     return -EUCLEAN;
   }
 
   if (chosen) {
-    sbi->total_sectors = chosen->total_sectors;
-    sbi->data_start_sector = chosen->data_start_sector;
+    sbi->total_sectors = le64_to_cpu(chosen->total_sectors);
+    sbi->meta_start_sector = le64_to_cpu(chosen->meta_start_sector);
+    sbi->meta_sector_count = le32_to_cpu(chosen->meta_sector_count);
+    sbi->data_start_sector = le64_to_cpu(chosen->data_start_sector);
     sbi->max_filename_len =
-        min_t(u32, chosen->max_filename_len, SIMPLEFS_NAME_MAX);
-    sbi->max_file_sectors = chosen->max_file_sectors;
-    sbi->file_count = chosen->file_count;
-
-    if (sbi->max_filename_len == 0 || sbi->max_file_sectors == 0 ||
-        sbi->file_count == 0)
-      return -EINVAL;
-
-    if (sbi->data_start_sector + (u64)sbi->file_count * sbi->max_file_sectors >
-        sbi->total_sectors)
-      return -EINVAL;
+        min_t(u32, le32_to_cpu(chosen->max_filename_len), SIMPLEFS_NAME_MAX);
+    sbi->max_file_sectors = le32_to_cpu(chosen->max_file_sectors);
+    sbi->file_count = le32_to_cpu(chosen->file_count);
 
     ret = simplefs_prepare_file_table(sb, sbi);
     if (ret)
       return ret;
 
+    ret = simplefs_load_file_meta(sb, sbi);
+    if (ret)
+      return ret;
+
+    sbi->erased = false;
     return 0;
   }
 
-  /* fresh format */
   memset(&newds, 0, sizeof(newds));
-  newds.magic = SIMPLEFS_MAGIC;
-  newds.version = SIMPLEFS_VERSION;
-  newds.total_sectors = dev_sectors;
-  newds.super1_sector = sbi->super1_sector;
-  newds.super2_sector = sbi->super2_sector;
-  newds.max_filename_len = sbi->max_filename_len;
-  newds.max_file_sectors = sbi->max_file_sectors;
+  newds.magic = cpu_to_le32(SIMPLEFS_MAGIC);
+  newds.version = cpu_to_le32(SIMPLEFS_VERSION);
+  newds.total_sectors = cpu_to_le64(dev_sectors);
+  newds.super1_sector = cpu_to_le64(sbi->super1_sector);
+  newds.super2_sector = cpu_to_le64(sbi->super2_sector);
+  newds.max_filename_len = cpu_to_le32(sbi->max_filename_len);
+  newds.max_file_sectors = cpu_to_le32(sbi->max_file_sectors);
 
-  newds.data_start_sector = max(sbi->super1_sector, sbi->super2_sector) + 1;
-  available_sectors = (dev_sectors > newds.data_start_sector)
-                          ? (dev_sectors - newds.data_start_sector)
-                          : 0;
+  /*
+   * First estimate file_count without metadata table, then compute metadata
+   * space, then recompute until stable.
+   */
+  newds.meta_start_sector =
+      cpu_to_le64(max(sbi->super1_sector, sbi->super2_sector) + 1);
 
-  newds.file_count = (u32)(available_sectors / sbi->max_file_sectors);
-  if (newds.file_count == 0)
+  available_sectors = dev_sectors - le64_to_cpu(newds.meta_start_sector);
+  newds.file_count =
+      cpu_to_le32((u32)(available_sectors / sbi->max_file_sectors));
+
+  meta_sector_count =
+      simplefs_meta_sector_count_for_files(le32_to_cpu(newds.file_count));
+  newds.meta_sector_count = cpu_to_le32(meta_sector_count);
+
+  newds.data_start_sector =
+      cpu_to_le64(le64_to_cpu(newds.meta_start_sector) + meta_sector_count);
+
+  available_sectors = dev_sectors - le64_to_cpu(newds.data_start_sector);
+  newds.file_count =
+      cpu_to_le32((u32)(available_sectors / sbi->max_file_sectors));
+
+  meta_sector_count =
+      simplefs_meta_sector_count_for_files(le32_to_cpu(newds.file_count));
+  newds.meta_sector_count = cpu_to_le32(meta_sector_count);
+  newds.data_start_sector =
+      cpu_to_le64(le64_to_cpu(newds.meta_start_sector) + meta_sector_count);
+
+  if (le32_to_cpu(newds.file_count) == 0)
     return -EINVAL;
 
-  sbi->data_start_sector = newds.data_start_sector;
-  sbi->file_count = newds.file_count;
+  sbi->meta_start_sector = le64_to_cpu(newds.meta_start_sector);
+  sbi->meta_sector_count = le32_to_cpu(newds.meta_sector_count);
+  sbi->data_start_sector = le64_to_cpu(newds.data_start_sector);
+  sbi->file_count = le32_to_cpu(newds.file_count);
 
   ret = simplefs_prepare_file_table(sb, sbi);
+  if (ret)
+    return ret;
+
+  /* metadata table on disk starts empty */
+  ret = simplefs_zero_sector_range(sb, sbi->meta_start_sector,
+                                   sbi->meta_sector_count);
   if (ret)
     return ret;
 
@@ -278,6 +355,7 @@ int simplefs_load_or_format(struct super_block *sb,
   if (ret)
     return ret;
 
+  sbi->erased = false;
   return 0;
 }
 

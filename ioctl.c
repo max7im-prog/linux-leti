@@ -102,8 +102,8 @@ long simplefs_ioctl(struct file *file, unsigned int cmd, unsigned long arg) {
 
       fm->size = 0;
       fm->hash = 0;
+      simplefs_store_file_meta(sb, i, fm);
     }
-
     sync_blockdev(sb->s_bdev);
     break;
   }

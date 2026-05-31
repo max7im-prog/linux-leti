@@ -5,6 +5,16 @@
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
 
+static int simplefs_file_index_from_inode(struct inode *inode) {
+  u64 ino = inode->i_ino;
+
+  if (ino < SIMPLEFS_FIRST_FILE_INO)
+    return -EINVAL;
+
+  ino -= SIMPLEFS_FIRST_FILE_INO;
+  return (int)ino;
+}
+
 static ssize_t simplefs_read(struct file *file, char __user *buf, size_t len,
                              loff_t *ppos) {
 
@@ -98,6 +108,7 @@ static ssize_t simplefs_write(struct file *file, const char __user *buf,
       simplefs_rw_bytes(inode->i_sb, fm->start_sector, *ppos, kbuf, len, true);
   if (ret > 0) {
     loff_t end = *ppos + ret;
+    int idx = simplefs_file_index_from_inode(inode);
 
     *ppos = end;
     if (end > fm->size)
@@ -105,6 +116,9 @@ static ssize_t simplefs_write(struct file *file, const char __user *buf,
 
     fm->hash = simplefs_hash_file(inode->i_sb, fm);
     i_size_write(inode, fm->size);
+
+    if (idx >= 0)
+      simplefs_store_file_meta(inode->i_sb, (u32)idx, fm);
   }
 
   kvfree(kbuf);
@@ -118,7 +132,7 @@ static int simplefs_iterate(struct file *file, struct dir_context *ctx) {
   struct simplefs_sb_info *sbi = inode->i_sb->s_fs_info;
   loff_t i;
 
-  if (sbi->erased || !sbi->files)
+  if (!sbi || sbi->erased || !sbi->files)
     return 0;
 
   if (!dir_emit_dots(file, ctx))
